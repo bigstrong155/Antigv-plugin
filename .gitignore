@@ -22,3 +22,5 @@ spec.md
 database/
 
 config.json
+pnpm-lock.yaml
+test/*

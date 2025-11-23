@@ -92,7 +92,17 @@ class OAuthService {
    */
   async exchangeCodeForToken(code) {
     const callbackUrl = this.getCallbackUrl();
-    logger.info('收到授权码，正在交换 Token...');
+    const requestId = crypto.randomUUID().substring(0, 8);
+    const startTime = Date.now();
+    
+    logger.info(`[${requestId}] 开始Token交换流程`);
+    logger.info(`[${requestId}] 请求参数:`, {
+      code_length: code ? code.length : 0,
+      client_id: CLIENT_ID,
+      redirect_uri: callbackUrl,
+      grant_type: 'authorization_code',
+      has_client_secret: !!CLIENT_SECRET
+    });
     
     return new Promise((resolve, reject) => {
       const postData = new URLSearchParams({
@@ -118,27 +128,100 @@ class OAuthService {
         }
       };
       
+      logger.info(`[${requestId}] 发送HTTPS请求:`, {
+        hostname: options.hostname,
+        path: options.path,
+        method: options.method,
+        headers: {
+          'Content-Type': options.headers['Content-Type'],
+          'Content-Length': options.headers['Content-Length']
+        },
+        body_size: Buffer.byteLength(data)
+      });
+      
       const req = https.request(options, (res) => {
+        const responseStartTime = Date.now();
+        logger.info(`[${requestId}] 收到响应:`, {
+          status_code: res.statusCode,
+          status_message: res.statusMessage,
+          headers: res.headers,
+          http_version: res.httpVersion
+        });
+        
         let body = '';
-        res.on('data', chunk => body += chunk);
+        let chunkCount = 0;
+        let totalBytes = 0;
+        
+        res.on('data', chunk => {
+          chunkCount++;
+          totalBytes += chunk.length;
+          body += chunk;
+          logger.debug(`[${requestId}] 接收数据块 #${chunkCount}: ${chunk.length} bytes`);
+        });
+        
         res.on('end', () => {
+          const totalTime = Date.now() - startTime;
+          const responseTime = Date.now() - responseStartTime;
+          
+          logger.info(`[${requestId}] 响应接收完成:`, {
+            total_chunks: chunkCount,
+            total_bytes: totalBytes,
+            response_time_ms: responseTime,
+            total_time_ms: totalTime
+          });
+          
           if (res.statusCode === 200) {
-            logger.info('Token 交换成功');
-            resolve(JSON.parse(body));
+            try {
+              const tokenData = JSON.parse(body);
+              logger.info(`[${requestId}] Token交换成功:`, {
+                access_token_length: tokenData.access_token ? tokenData.access_token.length : 0,
+                refresh_token_length: tokenData.refresh_token ? tokenData.refresh_token.length : 0,
+                expires_in: tokenData.expires_in,
+                token_type: tokenData.token_type,
+                scope: tokenData.scope
+              });
+              resolve(tokenData);
+            } catch (parseError) {
+              logger.error(`[${requestId}] JSON解析失败:`, parseError.message);
+              logger.error(`[${requestId}] 原始响应:`, body);
+              reject(new Error(`JSON解析失败: ${parseError.message}`));
+            }
           } else {
-            logger.error(`Token 交换失败 (${res.statusCode}):`, body);
+            logger.error(`[${requestId}] Token交换失败:`, {
+              status_code: res.statusCode,
+              status_message: res.statusMessage,
+              response_body: body,
+              response_size: body.length
+            });
             reject(new Error(`HTTP ${res.statusCode}: ${body}`));
           }
         });
       });
       
       req.on('error', (error) => {
-        logger.error('Token 交换请求失败:', error.message);
+        const totalTime = Date.now() - startTime;
+        logger.error(`[${requestId}] 请求异常:`, {
+          error_message: error.message,
+          error_code: error.code,
+          error_stack: error.stack,
+          total_time_ms: totalTime
+        });
         reject(error);
+      });
+      
+      req.on('socket', (socket) => {
+        socket.on('connect', () => {
+          logger.info(`[${requestId}] TCP连接建立`);
+        });
+        socket.on('timeout', () => {
+          logger.warn(`[${requestId}] Socket超时`);
+        });
       });
       
       req.write(data);
       req.end();
+      
+      logger.info(`[${requestId}] 请求已发送，等待响应...`);
     });
   }
 
@@ -148,6 +231,17 @@ class OAuthService {
    * @returns {Promise<Object>} 新的token数据
    */
   async refreshAccessToken(refresh_token) {
+    const requestId = crypto.randomUUID().substring(0, 8);
+    const startTime = Date.now();
+    
+    logger.info(`[${requestId}] 开始刷新Token流程`);
+    logger.info(`[${requestId}] 请求参数:`, {
+      refresh_token_length: refresh_token ? refresh_token.length : 0,
+      client_id: CLIENT_ID,
+      grant_type: 'refresh_token',
+      has_client_secret: !!CLIENT_SECRET
+    });
+    
     return new Promise((resolve, reject) => {
       const postData = new URLSearchParams({
         client_id: CLIENT_ID,
@@ -167,28 +261,101 @@ class OAuthService {
           'Content-Length': Buffer.byteLength(data)
         }
       };
+      
+      logger.info(`[${requestId}] 发送HTTPS请求:`, {
+        hostname: options.hostname,
+        path: options.path,
+        method: options.method,
+        headers: {
+          'Content-Type': options.headers['Content-Type'],
+          'Content-Length': options.headers['Content-Length']
+        },
+        body_size: Buffer.byteLength(data)
+      });
 
       const req = https.request(options, (res) => {
+        const responseStartTime = Date.now();
+        logger.info(`[${requestId}] 收到响应:`, {
+          status_code: res.statusCode,
+          status_message: res.statusMessage,
+          headers: res.headers,
+          http_version: res.httpVersion
+        });
+        
         let body = '';
-        res.on('data', chunk => body += chunk);
+        let chunkCount = 0;
+        let totalBytes = 0;
+        
+        res.on('data', chunk => {
+          chunkCount++;
+          totalBytes += chunk.length;
+          body += chunk;
+          logger.debug(`[${requestId}] 接收数据块 #${chunkCount}: ${chunk.length} bytes`);
+        });
+        
         res.on('end', () => {
+          const totalTime = Date.now() - startTime;
+          const responseTime = Date.now() - responseStartTime;
+          
+          logger.info(`[${requestId}] 响应接收完成:`, {
+            total_chunks: chunkCount,
+            total_bytes: totalBytes,
+            response_time_ms: responseTime,
+            total_time_ms: totalTime
+          });
+          
           if (res.statusCode === 200) {
-            logger.info('成功刷新访问令牌');
-            resolve(JSON.parse(body));
+            try {
+              const tokenData = JSON.parse(body);
+              logger.info(`[${requestId}] Token刷新成功:`, {
+                access_token_length: tokenData.access_token ? tokenData.access_token.length : 0,
+                expires_in: tokenData.expires_in,
+                token_type: tokenData.token_type,
+                scope: tokenData.scope,
+                has_refresh_token: !!tokenData.refresh_token
+              });
+              resolve(tokenData);
+            } catch (parseError) {
+              logger.error(`[${requestId}] JSON解析失败:`, parseError.message);
+              logger.error(`[${requestId}] 原始响应:`, body);
+              reject(new Error(`JSON解析失败: ${parseError.message}`));
+            }
           } else {
-            logger.error(`刷新token失败 (${res.statusCode}):`, body);
+            logger.error(`[${requestId}] Token刷新失败:`, {
+              status_code: res.statusCode,
+              status_message: res.statusMessage,
+              response_body: body,
+              response_size: body.length
+            });
             reject(new Error(`HTTP ${res.statusCode}: ${body}`));
           }
         });
       });
 
       req.on('error', (error) => {
-        logger.error('刷新token请求失败:', error.message);
+        const totalTime = Date.now() - startTime;
+        logger.error(`[${requestId}] 请求异常:`, {
+          error_message: error.message,
+          error_code: error.code,
+          error_stack: error.stack,
+          total_time_ms: totalTime
+        });
         reject(error);
+      });
+      
+      req.on('socket', (socket) => {
+        socket.on('connect', () => {
+          logger.info(`[${requestId}] TCP连接建立`);
+        });
+        socket.on('timeout', () => {
+          logger.warn(`[${requestId}] Socket超时`);
+        });
       });
 
       req.write(data);
       req.end();
+      
+      logger.info(`[${requestId}] 请求已发送，等待响应...`);
     });
   }
 

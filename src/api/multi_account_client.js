@@ -5,6 +5,18 @@ import quotaService from '../services/quota.service.js';
 import oauthService from '../services/oauth.service.js';
 
 /**
+ * 自定义API错误类，包含HTTP状态码
+ */
+class ApiError extends Error {
+  constructor(message, statusCode, responseText) {
+    super(message);
+    this.name = 'ApiError';
+    this.statusCode = statusCode;
+    this.responseText = responseText;
+  }
+}
+
+/**
  * 多账号API客户端
  * 支持从数据库获取账号并进行轮询
  */
@@ -174,27 +186,35 @@ class MultiAccountClient {
     
     const url = config.api.url;
     
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Host': config.api.host,
-        'User-Agent': config.api.userAgent,
-        'Authorization': `Bearer ${account.access_token}`,
-        'Content-Type': 'application/json',
-        'Accept-Encoding': 'gzip'
-      },
-      body: JSON.stringify(requestBody)
-    });
+    const requestHeaders = {
+      'Host': config.api.host,
+      'User-Agent': config.api.userAgent,
+      'Authorization': `Bearer ${account.access_token}`,
+      'Content-Type': 'application/json',
+      'Accept-Encoding': 'gzip'
+    };
     
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error(`API请求失败 - 状态码: ${response.status}, 错误内容: ${errorText}`);
-      if (response.status === 403) {
-        logger.warn(`账号没有使用权限，已禁用: cookie_id=${account.cookie_id}`);
-        await accountService.updateAccountStatus(account.cookie_id, 0);
-        throw new Error(`该账号没有使用权限，已自动禁用。错误详情: ${errorText}`);
+    let response;
+    
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody)
+      });
+      
+      if (!response.ok) {
+        const responseText = await response.text();
+        
+        if (response.status === 403) {
+          logger.warn(`账号没有使用权限，已禁用: cookie_id=${account.cookie_id}`);
+          await accountService.updateAccountStatus(account.cookie_id, 0);
+        }
+        throw new ApiError(responseText, response.status, responseText);
       }
-      throw new Error(`API请求失败 (${response.status}): ${errorText}`);
+      
+    } catch (error) {
+      throw error;
     }
 
     const reader = response.body.getReader();
@@ -240,6 +260,10 @@ class MultiAccountClient {
                 }
                 callback({ type: 'thinking', content: part.text || '' });
               } else if (part.text !== undefined) {
+                // 过滤掉空的非thought文本
+                if (part.text.trim() === '') {
+                  continue;
+                }
                 if (thinkingStarted) {
                   callback({ type: 'thinking', content: '\n</think>\n' });
                   thinkingStarted = false;
@@ -335,19 +359,36 @@ class MultiAccountClient {
       account.access_token = tokenData.access_token;
     }
 
-    const response = await fetch(config.api.modelsUrl, {
-      method: 'POST',
-      headers: {
-        'Host': config.api.host,
-        'User-Agent': config.api.userAgent,
-        'Authorization': `Bearer ${account.access_token}`,
-        'Content-Type': 'application/json',
-        'Accept-Encoding': 'gzip'
-      },
-      body: JSON.stringify({})
-    });
-
-    const data = await response.json();
+    const modelsUrl = config.api.modelsUrl;
+    
+    const requestHeaders = {
+      'Host': config.api.host,
+      'User-Agent': config.api.userAgent,
+      'Authorization': `Bearer ${account.access_token}`,
+      'Content-Type': 'application/json',
+      'Accept-Encoding': 'gzip'
+    };
+    const requestBody = {};
+    
+    let response;
+    let data;
+    
+    try {
+      response = await fetch(modelsUrl, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody)
+      });
+      
+      data = await response.json();
+      
+      if (!response.ok) {
+        throw new ApiError(JSON.stringify(data), response.status, JSON.stringify(data));
+      }
+      
+    } catch (error) {
+      throw error;
+    }
     
     // 更新配额信息
     if (data.models) {
@@ -372,21 +413,27 @@ class MultiAccountClient {
    * @returns {Promise<void>}
    */
   async refreshCookieQuota(cookie_id, access_token) {
+    const modelsUrl = config.api.modelsUrl;
+    
     try {
-      const response = await fetch(config.api.modelsUrl, {
+      const requestHeaders = {
+        'Host': config.api.host,
+        'User-Agent': config.api.userAgent,
+        'Authorization': `Bearer ${access_token}`,
+        'Content-Type': 'application/json',
+        'Accept-Encoding': 'gzip'
+      };
+      const requestBody = {};
+      
+      const response = await fetch(modelsUrl, {
         method: 'POST',
-        headers: {
-          'Host': config.api.host,
-          'User-Agent': config.api.userAgent,
-          'Authorization': `Bearer ${access_token}`,
-          'Content-Type': 'application/json',
-          'Accept-Encoding': 'gzip'
-        },
-        body: JSON.stringify({})
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody)
       });
-
+      
       if (response.ok) {
         const data = await response.json();
+        
         if (data.models) {
           await quotaService.updateQuotasFromModels(cookie_id, data.models);
         }

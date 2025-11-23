@@ -10,25 +10,35 @@ export async function generateAssistantResponse(requestBody, callback) {
   
   const url = config.api.url;
   
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Host': config.api.host,
-      'User-Agent': config.api.userAgent,
-      'Authorization': `Bearer ${token.access_token}`,
-      'Content-Type': 'application/json',
-      'Accept-Encoding': 'gzip'
-    },
-    body: JSON.stringify(requestBody)
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    if (response.status === 403) {
-      tokenManager.disableCurrentToken(token);
-      throw new Error(`该账号没有使用权限，已自动禁用。错误详情: ${errorText}`);
+  const requestHeaders = {
+    'Host': config.api.host,
+    'User-Agent': config.api.userAgent,
+    'Authorization': `Bearer ${token.access_token}`,
+    'Content-Type': 'application/json',
+    'Accept-Encoding': 'gzip'
+  };
+  
+  let response;
+  
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: requestHeaders,
+      body: JSON.stringify(requestBody)
+    });
+    
+    if (!response.ok) {
+      const responseText = await response.text();
+      
+      if (response.status === 403) {
+        tokenManager.disableCurrentToken(token);
+        throw new Error(`该账号没有使用权限，已自动禁用。错误详情: ${responseText}`);
+      }
+      throw new Error(`API请求失败 (${response.status}): ${responseText}`);
     }
-    throw new Error(`API请求失败 (${response.status}): ${errorText}`);
+    
+  } catch (error) {
+    throw error;
   }
 
   const reader = response.body.getReader();
@@ -36,17 +46,20 @@ export async function generateAssistantResponse(requestBody, callback) {
   let thinkingStarted = false;
   let toolCalls = [];
 
+  let chunkCount = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     
     const chunk = decoder.decode(value);
+    chunkCount++;
     const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
     
     for (const line of lines) {
       const jsonStr = line.slice(6);
       try {
         const data = JSON.parse(jsonStr);
+        
         const parts = data.response?.candidates?.[0]?.content?.parts;
         if (parts) {
           for (const part of parts) {
@@ -57,6 +70,10 @@ export async function generateAssistantResponse(requestBody, callback) {
               }
               callback({ type: 'thinking', content: part.text || '' });
             } else if (part.text !== undefined) {
+              // 过滤掉空的非thought文本
+              if (part.text.trim() === '') {
+                continue;
+              }
               if (thinkingStarted) {
                 callback({ type: 'thinking', content: '\n</think>\n' });
                 thinkingStarted = false;
@@ -98,19 +115,36 @@ export async function getAvailableModels() {
     throw new Error('没有可用的token，请运行 npm run login 获取token');
   }
   
-  const response = await fetch(config.api.modelsUrl, {
-    method: 'POST',
-    headers: {
-      'Host': config.api.host,
-      'User-Agent': config.api.userAgent,
-      'Authorization': `Bearer ${token.access_token}`,
-      'Content-Type': 'application/json',
-      'Accept-Encoding': 'gzip'
-    },
-    body: JSON.stringify({})
-  });
-
-  const data = await response.json();
+  const modelsUrl = config.api.modelsUrl;
+  
+  const requestHeaders = {
+    'Host': config.api.host,
+    'User-Agent': config.api.userAgent,
+    'Authorization': `Bearer ${token.access_token}`,
+    'Content-Type': 'application/json',
+    'Accept-Encoding': 'gzip'
+  };
+  const requestBody = {};
+  
+  let response;
+  let data;
+  
+  try {
+    response = await fetch(modelsUrl, {
+      method: 'POST',
+      headers: requestHeaders,
+      body: JSON.stringify(requestBody)
+    });
+    
+    data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(`获取模型列表失败 (${response.status}): ${JSON.stringify(data)}`);
+    }
+    
+  } catch (error) {
+    throw error;
+  }
   
   return {
     object: 'list',

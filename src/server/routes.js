@@ -758,7 +758,8 @@ router.get('/v1/models', authenticateApiKey, async (req, res) => {
     res.json(models);
   } catch (error) {
     logger.error('获取模型列表失败:', error.message);
-    res.status(500).json({ error: error.message });
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.responseText || error.message });
   }
 });
 
@@ -778,16 +779,19 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
     const requestBody = generateRequestBody(messages, model, params, tools);
 
     if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-
       const id = `chatcmpl-${Date.now()}`;
       const created = Math.floor(Date.now() / 1000);
       let hasToolCall = false;
       let collectedImages = [];
+      let streamStarted = false;
 
       await multiAccountClient.generateResponse(requestBody, (data) => {
+        if (!streamStarted) {
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          streamStarted = true;
+        }
         if (data.type === 'tool_calls') {
           hasToolCall = true;
           res.write(`data: ${JSON.stringify({
@@ -885,32 +889,32 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
     }
   } catch (error) {
     logger.error('生成响应失败:', error.message);
+    const statusCode = error.statusCode || 500;
+    const errorMessage = error.responseText || error.message;
+    
     if (!res.headersSent) {
-      if (stream) {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        const id = `chatcmpl-${Date.now()}`;
-        const created = Math.floor(Date.now() / 1000);
-        res.write(`data: ${JSON.stringify({
-          id,
-          object: 'chat.completion.chunk',
-          created,
-          model,
-          choices: [{ index: 0, delta: { content: `错误: ${error.message}` }, finish_reason: null }]
-        })}\n\n`);
-        res.write(`data: ${JSON.stringify({
-          id,
-          object: 'chat.completion.chunk',
-          created,
-          model,
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
-        })}\n\n`);
-        res.write('data: [DONE]\n\n');
-        res.end();
-      } else {
-        res.status(500).json({ error: error.message });
-      }
+      // 如果还没有发送响应头，返回正确的状态码
+      res.status(statusCode).json({ error: errorMessage });
+    } else if (stream) {
+      // 如果已经开始流式传输，只能在流中发送错误信息
+      const id = `chatcmpl-${Date.now()}`;
+      const created = Math.floor(Date.now() / 1000);
+      res.write(`data: ${JSON.stringify({
+        id,
+        object: 'chat.completion.chunk',
+        created,
+        model,
+        choices: [{ index: 0, delta: { content: `错误: ${errorMessage}` }, finish_reason: null }]
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        id,
+        object: 'chat.completion.chunk',
+        created,
+        model,
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+      })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
     }
   }
 });

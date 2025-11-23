@@ -76,14 +76,13 @@ function handleUserMessage(extracted, antigravityMessages, enableThinking){
     parts
   });
 }
-function handleAssistantMessage(message, antigravityMessages){
+function handleAssistantMessage(message, antigravityMessages, isImageModel = false){
   const lastMessage = antigravityMessages[antigravityMessages.length - 1];
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
   const hasContent = message.content &&
     (typeof message.content === 'string' ? message.content.trim() !== '' : true);
   
   const antigravityTools = hasToolCalls ? message.tool_calls.map(toolCall => {
-    // 解析arguments字符串为对象
     let argsObj;
     try {
       argsObj = typeof toolCall.function.arguments === 'string'
@@ -107,24 +106,45 @@ function handleAssistantMessage(message, antigravityMessages){
   }else{
     const parts = [];
     if (hasContent) {
-      // 提取文本内容，处理可能的数组格式
       let textContent = '';
       if (typeof message.content === 'string') {
         textContent = message.content;
       } else if (Array.isArray(message.content)) {
-        // 如果content是数组，提取所有text类型的内容
         textContent = message.content
           .filter(item => item.type === 'text')
           .map(item => item.text)
           .join('');
       }
+      
+      // 提取并处理 <think>...</think> 标签内容
+      const thinkMatches = textContent.match(/<think>([\s\S]*?)<\/think>/g);
+      if (thinkMatches) {
+        for (const match of thinkMatches) {
+          const thinkContent = match.replace(/<\/?think>/g, '').trim();
+          if (thinkContent) {
+            parts.push({ text: thinkContent, thought: true });
+          }
+        }
+      }
+      
+      // 移除 <think>...</think> 标签及其内容，保留其他文本
+      textContent = textContent.replace(/<think>[\s\S]*?<\/think>/g, '');
+      
+      // 如果是image模型，移除图片相关的markdown标记
+      if (isImageModel) {
+        textContent = textContent.replace(/!\[.*?\]\(data:image\/[^)]+\)/g, '');
+        textContent = textContent.replace(/\[图像生成完成[^\]]*\]/g, '');
+      }
+      
+      // 清理多余的空行
+      textContent = textContent.replace(/\n{3,}/g, '\n\n').trim();
+      
       if (textContent) {
         parts.push({ text: textContent });
       }
     }
     parts.push(...antigravityTools);
     
-    // 确保parts数组不为空
     if (parts.length === 0) {
       parts.push({ text: "" });
     }
@@ -172,7 +192,7 @@ function handleToolCall(message, antigravityMessages){
     });
   }
 }
-function openaiMessageToAntigravity(openaiMessages, enableThinking, isCompletionModel = false){
+function openaiMessageToAntigravity(openaiMessages, enableThinking, isCompletionModel = false, modelName = ''){
   // 补全模型只需要最后一条用户消息作为提示
   if (isCompletionModel) {
     // 将所有消息合并为一个提示词
@@ -193,14 +213,15 @@ function openaiMessageToAntigravity(openaiMessages, enableThinking, isCompletion
     }];
   }
   
-  // 标准对话模型的处理
   const antigravityMessages = [];
+  const isImageModel = modelName.endsWith('-image');
+  
   for (const message of openaiMessages) {
     if (message.role === "user" || message.role === "system") {
       const extracted = extractImagesFromContent(message.content);
       handleUserMessage(extracted, antigravityMessages, enableThinking);
     } else if (message.role === "assistant") {
-      handleAssistantMessage(message, antigravityMessages);
+      handleAssistantMessage(message, antigravityMessages, isImageModel);
     } else if (message.role === "tool") {
       handleToolCall(message, antigravityMessages);
     }
@@ -230,10 +251,14 @@ function generateGenerationConfig(parameters, enableThinking, actualModelName, i
     "<|endoftext|>",
     "<|end_of_turn|>"
   ];
-  generationConfig.thinkingConfig = {
-    includeThoughts: enableThinking,
-    thinkingBudget: enableThinking ? 1024 : 0
-  };
+  
+  // gemini-2.5-flash-image 不支持 thinkingConfig 参数
+  if (actualModelName !== 'gemini-2.5-flash-image') {
+    generationConfig.thinkingConfig = {
+      includeThoughts: enableThinking,
+      thinkingBudget: enableThinking ? 1024 : 0
+    };
+  }
   
   if (enableThinking && actualModelName.includes("claude")){
     delete generationConfig.topP;
@@ -272,12 +297,14 @@ function generateRequestBody(openaiMessages,modelName,parameters,openaiTools){
   }
   
   // 标准对话模型使用标准格式
+  const generationConfig = generateGenerationConfig(parameters, enableThinking, actualModelName, false);
+  
   const requestBody = {
     project: generateProjectId(),
     requestId: generateRequestId(),
     request: {
-      contents: openaiMessageToAntigravity(openaiMessages, enableThinking, false),
-      generationConfig: generateGenerationConfig(parameters, enableThinking, actualModelName, false),
+      contents: openaiMessageToAntigravity(openaiMessages, enableThinking, false, actualModelName),
+      generationConfig: generationConfig,
       sessionId: generateSessionId(),
       systemInstruction: {
         role: "user",
