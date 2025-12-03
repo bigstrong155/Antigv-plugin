@@ -446,10 +446,10 @@ class OAuthService {
       
       // 检查是否有cloudaicompanionProject
       if (!projectData.cloudaicompanionProject) {
-        // 检查paidTier中是否包含free
-        const hasFree = projectData.paidTier && projectData.paidTier.some(
-          tier => tier.id === 'free'
-        );
+        // 检查paidTier是否为free（paidTier是对象而非数组）
+        const hasFree = projectData.paidTier &&
+                       (projectData.paidTier.id === 'free' ||
+                        projectData.paidTier.id === 'free-tier');
         
         if (hasFree) {
           // 如果有free tier，则阻止登录

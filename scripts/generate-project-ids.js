@@ -79,9 +79,10 @@ async function generateProjectIdsForAllAccounts() {
         logger.info(`    当前状态: ${updatedAccount.status === 1 ? '启用' : '禁用'}`);
         
         // 判断账号是否应该可用
-        const hasFree = updatedAccount.paidTier && updatedAccount.paidTier.some(
-          tier => tier.id === 'free'
-        );
+        // paidTier是对象而非数组，检查其id字段
+        const hasFree = updatedAccount.paidTier &&
+                       (updatedAccount.paidTier.id === 'free' ||
+                        updatedAccount.paidTier.id === 'free-tier');
         
         // 账号可用条件：
         // 1. project_id_0 不为空
