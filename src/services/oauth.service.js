@@ -417,13 +417,20 @@ class OAuthService {
     let project_id_0 = '';
     let is_restricted = false;
     let ineligible = false;
+    let paid_tier = false;
     let projectData = null;
     
     try {
       projectData = await projectService.loadCodeAssist(tokenData.access_token);
       
-      // 检查是否为 INELIGIBLE_ACCOUNT
-      if (projectData.ineligibleTiers && projectData.ineligibleTiers.length > 0) {
+      // 首先判断是否为付费用户：paidTier.id 不包含 'free' 字符串则为付费用户
+      // 如果没有paidTier，默认为false（免费用户）
+      if (projectData.paidTier?.id) {
+        paid_tier = !projectData.paidTier.id.toLowerCase().includes('free');
+      }
+      
+      // 检查是否为 INELIGIBLE_ACCOUNT（付费用户跳过此检查）
+      if (!paid_tier && projectData.ineligibleTiers && projectData.ineligibleTiers.length > 0) {
         const hasIneligibleAccount = projectData.ineligibleTiers.some(
           tier => tier.reasonCode === 'INELIGIBLE_ACCOUNT'
         );
@@ -433,8 +440,10 @@ class OAuthService {
           this.stateMap.delete(state);
           throw new Error('此账号没有资格使用Antigravity: INELIGIBLE_ACCOUNT');
         }
-        
-        // 检查是否为 UNSUPPORTED_LOCATION
+      }
+      
+      // 检查是否为 UNSUPPORTED_LOCATION
+      if (projectData.ineligibleTiers && projectData.ineligibleTiers.length > 0) {
         const hasUnsupportedLocation = projectData.ineligibleTiers.some(
           tier => tier.reasonCode === 'UNSUPPORTED_LOCATION'
         );
@@ -445,16 +454,14 @@ class OAuthService {
         }
       }
       
+      // 如果是付费用户，记录日志
+      if (paid_tier) {
+        logger.info(`检测到付费用户，允许通过: cookie_id=${cookie_id}, tier=${projectData.paidTier?.id}`);
+      }
+      
       // 获取project_id_0
       if (!is_restricted && projectData.cloudaicompanionProject) {
         project_id_0 = projectData.cloudaicompanionProject;
-      }
-      
-      // 判断是否为付费用户：paidTier.id 不包含 'free' 字符串则为付费用户
-      // 如果没有paidTier，默认为false（免费用户）
-      let paid_tier = false;
-      if (projectData.paidTier?.id) {
-        paid_tier = !projectData.paidTier.id.toLowerCase().includes('free');
       }
       
       // 检查是否允许登录：project_id_0为空 且 paid_tier为false 时阻止登录
@@ -472,7 +479,7 @@ class OAuthService {
       
     } catch (error) {
       // 如果是已知的账号资格错误，直接抛出
-      if (error.message.includes('原因:')) {
+      if (error.message.includes('此账号没有资格使用Antigravity')) {
         throw error;
       }
       // 其他未知错误也阻止登录
