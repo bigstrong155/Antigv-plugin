@@ -86,14 +86,6 @@ class KiroClient {
     const cwRequest = kiroService.convertToCodeWhispererRequest(messages, model, options);
     const requestBody = JSON.stringify(cwRequest);
 
-    // 保存原始用户请求用于错误日志
-    const userRequest = {
-      messages,
-      model,
-      options,
-      user_id
-    };
-
     return new Promise((resolve, reject) => {
       const headers = kiroService.getCodeWhispererHeaders(account.access_token, account.machineid);
       headers['Content-Length'] = Buffer.byteLength(requestBody);
@@ -113,21 +105,6 @@ class KiroClient {
           res.on('data', chunk => errorBody += chunk);
           res.on('end', () => {
             logger.error(`[${requestId}] API错误: ${res.statusCode} - ${errorBody}`);
-            
-            // 当返回400错误时，记录详细的请求信息
-            if (res.statusCode === 400) {
-              logger.error(`[${requestId}] ========== 400错误详细日志 ==========`);
-              logger.error(`[${requestId}] 用户原始请求:`, JSON.stringify(userRequest, null, 2));
-              logger.error(`[${requestId}] 上游请求体:`, JSON.stringify(cwRequest, null, 2));
-              logger.error(`[${requestId}] 上游请求头:`, JSON.stringify({
-                hostname: reqOptions.hostname,
-                path: reqOptions.path,
-                method: reqOptions.method,
-                headers: { ...headers, Authorization: 'Bearer [REDACTED]' }
-              }, null, 2));
-              logger.error(`[${requestId}] 上游响应:`, errorBody);
-              logger.error(`[${requestId}] ========== 400错误详细日志结束 ==========`);
-            }
             
             if (res.statusCode === 403) {
               kiroAccountService.updateAccountStatus(account.account_id, 0);
