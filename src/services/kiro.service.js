@@ -533,6 +533,62 @@ class KiroService {
   }
 
   /**
+   * 将 thinking part 转换为普通 text part，并移除 signature
+   * Kiro 模型不支持 thinking 功能，需要将 thinking 内容转换为普通文本
+   * @param {Array} messages - 消息数组
+   * @returns {Array} 处理后的消息数组
+   */
+  patchThinkingParts(messages) {
+    if (!Array.isArray(messages)) return messages;
+
+    return messages.map(message => {
+      // 如果消息没有 content 或 content 不是数组，直接返回
+      if (!message.content || !Array.isArray(message.content)) {
+        return message;
+      }
+
+      // 处理 content 数组中的每个 part
+      const patchedContent = message.content.map(part => {
+        // 检查是否是 thinking part（有 thought: true 属性）
+        if (part && part.thought === true) {
+          // 创建新对象，只保留 text 和 type 属性，移除 thought 和 thoughtSignature
+          const patchedPart = { type: 'text' };
+          if (part.text !== undefined) {
+            patchedPart.text = part.text;
+          }
+          return patchedPart;
+        }
+
+        // 检查是否是 Anthropic 格式的 thinking block（type: 'thinking'）
+        if (part && part.type === 'thinking') {
+          // 转换为普通 text part，移除 signature
+          const patchedPart = { type: 'text' };
+          if (part.thinking !== undefined) {
+            patchedPart.text = part.thinking;
+          } else if (part.text !== undefined) {
+            patchedPart.text = part.text;
+          }
+          // 不复制 signature 字段
+          return patchedPart;
+        }
+
+        // 如果 part 有 thoughtSignature 属性，移除它
+        if (part && part.thoughtSignature !== undefined) {
+          const { thoughtSignature, ...rest } = part;
+          return rest;
+        }
+
+        return part;
+      });
+
+      return {
+        ...message,
+        content: patchedContent
+      };
+    });
+  }
+
+  /**
    * 将OpenAI格式消息转换为CodeWhisperer格式
    * @param {Array} messages - OpenAI格式消息
    * @param {string} model - 模型名称
@@ -540,13 +596,16 @@ class KiroService {
    * @returns {Object} CodeWhisperer请求体
    */
   convertToCodeWhispererRequest(messages, model, options = {}) {
+    // 先处理 thinking parts，将其转换为普通 text parts
+    const patchedMessages = this.patchThinkingParts(messages);
+    
     const modelId = this.getKiroModelId(model);
     const conversationId = crypto.randomUUID();
     const agentContinuationId = crypto.randomUUID();
 
-    // 提取系统消息
-    const systemMessages = messages.filter(m => m.role === 'system');
-    const nonSystemMessages = messages.filter(m => m.role !== 'system');
+    // 提取系统消息（使用处理后的消息）
+    const systemMessages = patchedMessages.filter(m => m.role === 'system');
+    const nonSystemMessages = patchedMessages.filter(m => m.role !== 'system');
 
     // 构建历史记录
     const history = [];
