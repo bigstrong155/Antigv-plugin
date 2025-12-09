@@ -462,14 +462,28 @@ class MultiAccountClient {
                   }
                 });
               } else if (part.functionCall) {
-                toolCalls.push({
+                // 构建 tool_call 对象
+                const toolCall = {
                   id: part.functionCall.id,
                   type: 'function',
                   function: {
                     name: part.functionCall.name,
                     arguments: JSON.stringify(part.functionCall.args)
                   }
-                });
+                };
+                
+                // 如果有 thoughtSignature（与 functionCall 同级），添加到 extra_content 中
+                // 这是 Gemini 思考模型的特性，用于多轮工具调用时验证思考内容
+                // 注意：thoughtSignature 在 part 级别，与 functionCall 同级
+                if (part.thoughtSignature) {
+                  toolCall.extra_content = {
+                    google: {
+                      thought_signature: part.thoughtSignature
+                    }
+                  };
+                }
+                
+                toolCalls.push(toolCall);
               }
             }
           }
