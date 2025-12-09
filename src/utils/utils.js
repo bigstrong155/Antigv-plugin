@@ -614,10 +614,11 @@ async function generateRequestBody(openaiMessages, modelName, parameters, openai
   // 1. 最后一条助手消息没有思考内容
   // 2. 且没有存储的 signature 可用于注入
   // 如果有存储的 signature，可以通过注入来满足 API 要求，不需要禁用
-  // 注意：Gemini 模型不需要强制禁用思考，因为它可以处理没有思考内容的情况
+  // 注意：Gemini 模型和 rev19-uic3-1p 不需要强制禁用思考，因为它们可以处理没有思考内容的情况
   const isGeminiModel = baseModelName.startsWith('gemini-');
+  const isRev19Model = modelName === 'rev19-uic3-1p';
   let forceDisableThinking = false;
-  if (enableThinking && !isImageModel && !isGeminiModel) {
+  if (enableThinking && !isImageModel && !isGeminiModel && !isRev19Model) {
     const hasThinkingContent = hasThinkingContentInLastAssistant(openaiMessages);
     if (!hasThinkingContent && !storedSignature) {
       logger.info('最后一条助手消息没有思考内容且没有存储的 signature，禁用 thinking 功能');
