@@ -68,7 +68,7 @@ async function removeGeminiFlashImageData() {
     logger.info('\n========== 清理完成 ==========');
     logger.info(`model_quotas: 删除 ${quotasCount} 条`);
     logger.info(`user_shared_quota_pool: 删除 ${poolCount} 条`);
-    logger.info(`总计: ${quotasCount + poolCount + logCount} 条记录`);
+    logger.info(`总计: ${quotasCount + poolCount} 条记录`);
     logger.info('==============================\n');
     
   } catch (error) {
