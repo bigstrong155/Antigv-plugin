@@ -145,10 +145,10 @@ function handleAssistantMessage(message, antigravityMessages, isImageModel = fal
           parts.push({ text: textContent });
         }
       } else {
-        // 非思考模型：直接保留原始内容，包括 <think>...</think> 标签
-        // 不解析、不移除、不添加任何 thought/thoughtSignature 标记
+        // 将 <think></think> 标签替换为 <THOUGHT></THOUGHT> 标签
         if (textContent) {
-          parts.push({ text: textContent });
+          const processedText = convertThinkToThoughtTags(textContent);
+          parts.push({ text: processedText });
         }
       }
     }
