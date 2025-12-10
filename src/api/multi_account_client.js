@@ -245,6 +245,15 @@ class MultiAccountClient {
         const responseText = await response.text();
         
         if (response.status === 403) {
+          // 检查是否是 "The caller does not have permission" 错误
+          // 这种错误通常是临时性的，不应该禁用账号，直接返回错误
+          if (responseText.includes('The caller does not have permission') || responseText.includes('PERMISSION_DENIED')) {
+            logger.warn(`[403错误] 调用者没有权限(临时性错误)，不禁用账号，直接返回错误: cookie_id=${account.cookie_id}`);
+            callback({ type: 'error', content: 'PERMISSION_DENIED', upstreamResponse: responseText, upstreamRequest: requestBody });
+            throw new ApiError('PERMISSION_DENIED', 403, responseText);
+          }
+          
+          // 其他403错误，禁用账号
           logger.warn(`账号没有使用权限(403)，已禁用: cookie_id=${account.cookie_id}`);
           await accountService.updateAccountStatus(account.cookie_id, 0);
         }
@@ -754,6 +763,14 @@ class MultiAccountClient {
         const responseText = await response.text();
         
         if (response.status === 403) {
+          // 检查是否是 "The caller does not have permission" 错误
+          // 这种错误通常是临时性的，不应该禁用账号，直接返回错误
+          if (responseText.includes('The caller does not have permission') || responseText.includes('PERMISSION_DENIED')) {
+            logger.warn(`[图片生成-403错误] 调用者没有权限(临时性错误)，不禁用账号，直接返回错误: cookie_id=${account.cookie_id}`);
+            throw new ApiError('PERMISSION_DENIED', 403, responseText);
+          }
+          
+          // 其他403错误，禁用账号
           logger.warn(`账号没有使用权限(403)，已禁用: cookie_id=${account.cookie_id}`);
           await accountService.updateAccountStatus(account.cookie_id, 0);
         }

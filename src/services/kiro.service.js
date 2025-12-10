@@ -640,14 +640,23 @@ class KiroService {
     for (let i = 0; i < nonSystemMessages.length - 1; i++) {
       const msg = nonSystemMessages[i];
 
-      if (msg.role === 'user') {
+      if (msg.role === 'user' || msg.role === 'tool') {
         userBuffer.push(msg);
       } else if (msg.role === 'assistant') {
-        // 处理累积的用户消息
+        // 处理累积的用户消息（包括tool消息）
         if (userBuffer.length > 0) {
-          const content = userBuffer.map(m => this.extractTextContent(m.content)).join('\n');
-          const images = userBuffer.flatMap(m => this.extractImages(m.content));
-          const toolResults = userBuffer.flatMap(m => this.extractToolResults(m.content));
+          const content = userBuffer
+            .filter(m => m.role === 'user')
+            .map(m => this.extractTextContent(m.content))
+            .join('\n');
+          const images = userBuffer
+            .filter(m => m.role === 'user')
+            .flatMap(m => this.extractImages(m.content));
+          // 从user消息中提取tool_result块，以及从tool消息中提取工具结果
+          const toolResults = [
+            ...userBuffer.filter(m => m.role === 'user').flatMap(m => this.extractToolResults(m.content)),
+            ...userBuffer.filter(m => m.role === 'tool').map(m => this.convertToolMessageToResult(m))
+          ].filter(Boolean);
 
           history.push({
             userInputMessage: {
@@ -664,7 +673,8 @@ class KiroService {
 
         // 添加助手消息
         const textContent = this.extractTextContent(msg.content);
-        const toolUses = this.extractToolUses(msg.content);
+        // 同时支持 Anthropic 格式（content数组中的tool_use）和 OpenAI 格式（顶层tool_calls）
+        const toolUses = this.extractToolUses(msg.content, msg.tool_calls);
 
         history.push({
           assistantResponseMessage: {
@@ -675,11 +685,20 @@ class KiroService {
       }
     }
 
-    // 处理末尾的孤立用户消息
+    // 处理末尾的孤立用户消息（包括tool消息）
     if (userBuffer.length > 0) {
-      const content = userBuffer.map(m => this.extractTextContent(m.content)).join('\n');
-      const images = userBuffer.flatMap(m => this.extractImages(m.content));
-      const toolResults = userBuffer.flatMap(m => this.extractToolResults(m.content));
+      const content = userBuffer
+        .filter(m => m.role === 'user')
+        .map(m => this.extractTextContent(m.content))
+        .join('\n');
+      const images = userBuffer
+        .filter(m => m.role === 'user')
+        .flatMap(m => this.extractImages(m.content));
+      // 从user消息中提取tool_result块，以及从tool消息中提取工具结果
+      const toolResults = [
+        ...userBuffer.filter(m => m.role === 'user').flatMap(m => this.extractToolResults(m.content)),
+        ...userBuffer.filter(m => m.role === 'tool').map(m => this.convertToolMessageToResult(m))
+      ].filter(Boolean);
 
       history.push({
         userInputMessage: {
@@ -701,15 +720,93 @@ class KiroService {
 
     // 处理当前消息（最后一条）
     const lastMessage = nonSystemMessages[nonSystemMessages.length - 1];
-    let currentContent = this.extractTextContent(lastMessage.content);
-    const currentImages = this.extractImages(lastMessage.content);
-    const currentToolResults = this.extractToolResults(lastMessage.content);
-
-    // 如果有工具结果，内容应为空
-    if (currentToolResults.length > 0) {
-      currentContent = '';
+    
+    // 检查最后一条消息是否是tool消息（OpenAI格式的工具结果）
+    const isToolMessage = lastMessage.role === 'tool';
+    
+    let currentContent = isToolMessage ? '' : this.extractTextContent(lastMessage.content);
+    const currentImages = isToolMessage ? [] : this.extractImages(lastMessage.content);
+    
+    // 提取工具结果：从user消息的content中提取tool_result块，或从tool消息转换
+    let currentToolResults = [];
+    if (isToolMessage) {
+      const toolResult = this.convertToolMessageToResult(lastMessage);
+      if (toolResult) {
+        currentToolResults = [toolResult];
+      }
+    } else {
+      currentToolResults = this.extractToolResults(lastMessage.content);
     }
 
+    // 如果最后一条消息包含工具结果，需要特殊处理
+    if (currentToolResults.length > 0) {
+      // 找到工具调用之前的用户消息（用于 currentMessage.content）
+      let userContentBeforeToolCall = '';
+      for (let i = nonSystemMessages.length - 2; i >= 0; i--) {
+        const msg = nonSystemMessages[i];
+        if (msg.role === 'user') {
+          const textContent = this.extractTextContent(msg.content);
+          const toolResultsInMsg = this.extractToolResults(msg.content);
+          // 找到一条有文本内容且不只是工具结果的用户消息
+          if (textContent && toolResultsInMsg.length === 0) {
+            userContentBeforeToolCall = textContent;
+            break;
+          }
+        }
+      }
+      
+      // 获取工具结果的文本内容（用于 history 中的 userInputMessage.content）
+      const toolResultTextContent = currentToolResults.map(tr =>
+        tr.content.map(c => c.text || '').join('')
+      ).join('\n');
+
+      // 在 history 末尾插入：
+      // 1. 包含 toolResults 的 userInputMessage（content 是工具结果的文本）
+      // 2. 助手确认消息
+      history.push({
+        userInputMessage: {
+          content: toolResultTextContent,
+          modelId,
+          origin: KIRO_DEFAULTS.ORIGIN,
+          userInputMessageContext: {
+            toolResults: currentToolResults
+          }
+        }
+      });
+      
+      history.push({
+        assistantResponseMessage: {
+          content: 'I will follow these instructions.'
+        }
+      });
+
+      // currentMessage 的 userInputMessageContext 只包含 tools，不包含 toolResults
+      const userInputMessageContext = {};
+      if (options.tools?.length > 0) {
+        userInputMessageContext.tools = this.convertToolsToCodeWhisperer(options.tools);
+      }
+
+      return {
+        conversationState: {
+          agentContinuationId,
+          agentTaskType: KIRO_DEFAULTS.AGENT_TASK_TYPE,
+          chatTriggerType: this.determineChatTriggerType(options),
+          currentMessage: {
+            userInputMessage: {
+              userInputMessageContext,
+              content: userContentBeforeToolCall,  // 工具调用之前的用户消息
+              modelId,
+              images: currentImages,
+              origin: KIRO_DEFAULTS.ORIGIN
+            }
+          },
+          conversationId,
+          history
+        }
+      };
+    }
+
+    // 普通情况：最后一条消息不包含工具结果
     // 如果没有内容但有工具，注入占位符
     if (!currentContent && !currentImages.length && options.tools?.length > 0) {
       currentContent = '执行工具任务';
@@ -718,9 +815,6 @@ class KiroService {
     const userInputMessageContext = {};
     if (options.tools?.length > 0) {
       userInputMessageContext.tools = this.convertToolsToCodeWhisperer(options.tools);
-    }
-    if (currentToolResults.length > 0) {
-      userInputMessageContext.toolResults = currentToolResults;
     }
 
     return {
@@ -832,17 +926,92 @@ class KiroService {
   }
 
   /**
-   * 提取工具调用
+   * 将OpenAI格式的tool消息转换为Kiro的toolResult格式
+   * OpenAI格式: { role: 'tool', tool_call_id: 'xxx', content: '...' }
+   * Kiro格式: { toolUseId: 'xxx', content: [{ text: '...' }], status: 'success', isError: false }
+   * @param {Object} msg - OpenAI格式的tool消息
+   * @returns {Object|null} Kiro格式的toolResult，或null如果转换失败
    */
-  extractToolUses(content) {
-    if (typeof content === 'string' || !Array.isArray(content)) return [];
-    return content
-      .filter(b => b.type === 'tool_use' && b.id && b.name)
-      .map(b => ({
-        toolUseId: b.id,
-        name: b.name,
-        input: b.input || {}
-      }));
+  convertToolMessageToResult(msg) {
+    if (!msg || msg.role !== 'tool' || !msg.tool_call_id) {
+      return null;
+    }
+
+    let contentArray = [];
+    if (typeof msg.content === 'string') {
+      contentArray = [{ text: msg.content }];
+    } else if (Array.isArray(msg.content)) {
+      contentArray = msg.content.map(item =>
+        typeof item === 'string' ? { text: item } : (item.text ? { text: item.text } : item)
+      );
+    } else if (msg.content) {
+      contentArray = [{ text: String(msg.content) }];
+    }
+    
+    if (contentArray.length === 0) {
+      contentArray = [{ text: '' }];
+    }
+
+    return {
+      toolUseId: msg.tool_call_id,
+      content: contentArray,
+      status: 'success',
+      isError: false
+    };
+  }
+
+  /**
+   * 提取工具调用
+   * 支持两种格式：
+   * 1. Anthropic格式: content数组中的 { type: 'tool_use', id, name, input }
+   * 2. OpenAI格式: 消息顶层的 tool_calls 数组 [{ id, type: 'function', function: { name, arguments } }]
+   * @param {string|Array} content - 消息内容
+   * @param {Array} toolCalls - OpenAI格式的tool_calls数组（可选）
+   */
+  extractToolUses(content, toolCalls = null) {
+    const results = [];
+    
+    // 处理Anthropic格式: content数组中的tool_use块
+    if (Array.isArray(content)) {
+      const anthropicToolUses = content
+        .filter(b => b.type === 'tool_use' && b.id && b.name)
+        .map(b => ({
+          toolUseId: b.id,
+          name: b.name,
+          input: b.input || {}
+        }));
+      results.push(...anthropicToolUses);
+    }
+    
+    // 处理OpenAI格式: 顶层的tool_calls数组
+    if (Array.isArray(toolCalls)) {
+      const openaiToolUses = toolCalls
+        .filter(tc => tc.id && (tc.function?.name || tc.name))
+        .map(tc => {
+          let input = {};
+          // 解析arguments（可能是JSON字符串）
+          if (tc.function?.arguments) {
+            try {
+              input = typeof tc.function.arguments === 'string'
+                ? JSON.parse(tc.function.arguments)
+                : tc.function.arguments;
+            } catch (e) {
+              input = { raw: tc.function.arguments };
+            }
+          } else if (tc.input) {
+            input = tc.input;
+          }
+          
+          return {
+            toolUseId: tc.id,
+            name: tc.function?.name || tc.name,
+            input
+          };
+        });
+      results.push(...openaiToolUses);
+    }
+    
+    return results;
   }
 
   /**
