@@ -1,4 +1,5 @@
 {
-    "build_command": "npm run build",
+    "ignore_dockerfile": true,
+    "build_command": "npm install && npm run build",
     "start_command": "node dist/main.js"
 }
