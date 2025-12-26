@@ -1,5 +1,5 @@
 {
     "ignore_dockerfile": true,
-    "build_command": "npm install && npm run build",
-    "start_command": "node dist/main.js"
+    "build_command": "npm install",
+    "start_command": "npm start"
 }
